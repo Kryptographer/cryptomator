@@ -11,6 +11,7 @@ Param(
 	[Parameter(Mandatory, HelpMessage="Please provide an alias for localhost")][string] $LoopbackAlias,
 	[ValidateSet('installer', 'portable', 'corp', 'all')][string] $Target = 'installer', # what to build: the msi/exe installer, the portable zip, the per-user corp msi or everything
 	[string] $CorpUpgradeUUID = "d98d0145-341a-4684-bdb6-ee480294541a", # upgrade uuid of the per-user corp msi, must differ from the per-machine installer
+	[bool] $InstallDeps = $false, # if true, installs missing build dependencies (wix) instead of only reporting them
 	[bool] $clean = $false # if true, cleans up previous build artifacts
 )
 
@@ -25,6 +26,53 @@ $buildCorp = ($Target -eq 'corp') -or ($Target -eq 'all')
 # ============================
 # Function Definitions Section
 # ============================
+
+$wixVersion = '6.0.2'
+
+# "dotnet tool install --global" puts wix.exe here, but the PATH of an already running console does not know it yet
+function Add-DotnetToolsToPath {
+	$dotnetTools = Join-Path $Env:USERPROFILE ".dotnet\tools"
+	if ((Test-Path $dotnetTools) -and ($Env:PATH -notlike "*$dotnetTools*")) {
+		$Env:PATH = "$dotnetTools;$Env:PATH"
+	}
+}
+
+# returns the commands needed to complete the wix installation; an empty result means wix is ready to use
+function Get-MissingWixParts {
+	param ([string[]]$RequiredExtensions)
+
+	Add-DotnetToolsToPath
+	$missing = @()
+	if ((Get-Command 'wix' -ErrorAction SilentlyContinue) -eq $null) {
+		$missing += "dotnet tool install --global wix --version $wixVersion"
+		$missing += $RequiredExtensions | ForEach-Object { "wix extension add --global $_/$wixVersion" }
+	} else {
+		$installedExtensions = & wix.exe extension list --global | Out-String
+		$missing += $RequiredExtensions `
+			| Where-Object { $installedExtensions -notmatch [regex]::Escape($_) } `
+			| ForEach-Object { "wix extension add --global $_/$wixVersion" }
+	}
+	return @($missing)
+}
+
+# installs wix and the given extensions via the dotnet cli
+function Install-Wix {
+	param ([string[]]$Commands)
+
+	if ((Get-Command 'dotnet' -ErrorAction SilentlyContinue) -eq $null) {
+		Write-Warning "Cannot install WiX automatically: the .NET SDK is not installed. Get it with: winget install Microsoft.DotNet.SDK.8"
+		return
+	}
+	foreach ($command in $Commands) {
+		Write-Host "Installing build dependency: $command"
+		$parts = $command.Split(' ')
+		& $parts[0] @($parts[1..($parts.Length - 1)])
+		Add-DotnetToolsToPath
+		if ($LASTEXITCODE -ne 0) {
+			Write-Warning "'$command' failed with exit code $LASTEXITCODE"
+		}
+	}
+}
 
 function Invoke-CommandWithExitCheck {
 	param (
@@ -82,28 +130,35 @@ function Main {
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $ProgressPreference = 'SilentlyContinue' # disables Invoke-WebRequest's progress bar, which slows down downloads to a few bytes/s
 
-# check preconditions
+# check preconditions.
+# WiX is only needed for the msi/exe installer and the corp msi. The portable build does not need it,
+# so a missing WiX must never stop a run that can still produce the portable zip.
+$skipReason = ''
 if ($buildInstaller -or $buildCorp) {
-	# wix is only required for the msi/exe installer and the corp msi, not for the portable build.
-	# Report everything that is missing at once, so it can be installed in one go.
-	$wixVersion = '6.0.2'
 	$requiredExtensions = @('WixToolset.UI.wixext', 'WixToolset.Util.wixext')
 	if ($buildInstaller) {
 		$requiredExtensions += 'WixToolset.BootstrapperApplications.wixext'
 	}
-	$missing = @()
-	if ((Get-Command 'wix' -ErrorAction SilentlyContinue) -eq $null) {
-		$missing += "dotnet tool install --global wix --version $wixVersion"
-		$missing += $requiredExtensions | ForEach-Object { "wix extension add --global $_/$wixVersion" }
-	} else {
-		$wixExtensions = & wix.exe extension list --global | Out-String
-		$missing += $requiredExtensions | Where-Object { $wixExtensions -notmatch [regex]::Escape($_) } | ForEach-Object { "wix extension add --global $_/$wixVersion" }
+	$missingWixParts = Get-MissingWixParts -RequiredExtensions $requiredExtensions
+	if ($missingWixParts.Count -gt 0 -and $InstallDeps) {
+		Install-Wix -Commands $missingWixParts
+		$missingWixParts = Get-MissingWixParts -RequiredExtensions $requiredExtensions
 	}
-	if ($missing.Count -gt 0) {
-		Write-Error ("WiX $wixVersion is required to build the installer and corp targets (the portable build does not need it, see build-portable.bat).`n" +
-			"Install the missing parts with the following commands, then open a new console and try again:`n  " + ($missing -join "`n  ") +
-			"`nThe dotnet tool command needs the .NET SDK, e.g.: winget install Microsoft.DotNet.SDK.8")
-		exit 1
+	if ($missingWixParts.Count -gt 0) {
+		$hint = "WiX $wixVersion is required for the installer and corp targets. Install it by running`n" +
+			"    build.bat deps`n" +
+			"which runs these commands for you (they need the .NET SDK: winget install Microsoft.DotNet.SDK.8):`n  " +
+			($missingWixParts -join "`n  ")
+		if ($buildPortable) {
+			# still build everything that does not need WiX
+			Write-Warning "Skipping the installer and corp targets. $hint"
+			$skipReason = $hint
+			$buildInstaller = $false
+			$buildCorp = $false
+		} else {
+			Write-Error $hint
+			exit 1
+		}
 	}
 }
 
@@ -553,6 +608,15 @@ if ($buildCorp) {
 	$corpMsi = "$corpDir\$AppName-$version-$($archName.ToLower())-corp.msi"
 	Get-ChildItem -Path "$corpDir\$AppName-*.msi" | Move-Item -Destination $corpMsi -Force
 	Write-Host "Created per-user corp MSI $corpMsi"
+}
+
+Write-Host ""
+Write-Host "=== Build summary ==="
+Get-ChildItem -Path ".\installer\*.msi", ".\installer\*.exe", ".\portable\*.zip", ".\corp\*.msi" -ErrorAction Ignore `
+	| ForEach-Object { Write-Host "  built: $($_.FullName)" }
+if ($skipReason) {
+	Write-Host ""
+	Write-Warning "Some targets were skipped. $skipReason"
 }
 return 0;
 }

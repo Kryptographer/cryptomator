@@ -12,16 +12,19 @@ SET HELP_URL="https://cryptomator.org/contact/"
 SET MODULE_AND_MAIN_CLASS="org.cryptomator.desktop/org.cryptomator.launcher.Cryptomator"
 SET LOOPBACK_ALIAS="cryptomator-vault"
 
-:: Usage: build.bat [clean] [installer|portable|corp|all]
+:: Usage: build.bat [clean] [deps] [installer|portable|corp|all]
 ::   clean      remove previous build artifacts before building
+::   deps       install missing build dependencies (WiX) instead of only reporting them
 ::   installer  build the msi and exe installer (default)
 ::   portable   build the portable zip
 ::   corp       build the per-user msi for corporate machines without admin rights
 ::   all        build installer, portable zip and corp msi
 SET CLEAN=0
+SET DEPS=0
 SET TARGET=installer
 FOR %%A IN (%*) DO (
 	IF /I "%%~A"=="clean" SET CLEAN=1
+	IF /I "%%~A"=="deps" SET DEPS=1
 	IF /I "%%~A"=="installer" SET TARGET=installer
 	IF /I "%%~A"=="portable" SET TARGET=portable
 	IF /I "%%~A"=="corp" SET TARGET=corp
@@ -83,6 +86,7 @@ echo Building target "%TARGET%" (clean=%CLEAN%) ...
  -UpdateUrl "%UPDATE_URL%"^
  -LoopbackAlias "%LOOPBACK_ALIAS%"^
  -Target %TARGET%^
+ -InstallDeps %DEPS%^
  -Clean %CLEAN%
 SET EXITCODE=%ERRORLEVEL%
 popd
@@ -94,5 +98,8 @@ EXIT /B %EXITCODE%
 
 :: sets JAVA_HOME to the given directory if it contains a full JDK (normalizes trailing "\..")
 :setjavahome
-IF EXIST "%~f1\bin\jpackage.exe" SET "JAVA_HOME=%~f1"
+IF NOT EXIST "%~f1\bin\jpackage.exe" EXIT /B 0
+SET "JAVA_HOME=%~f1"
+:: a trailing backslash would escape the closing quote when JAVA_HOME is passed on to other tools
+IF "%JAVA_HOME:~-1%"=="\" SET "JAVA_HOME=%JAVA_HOME:~0,-1%"
 EXIT /B 0

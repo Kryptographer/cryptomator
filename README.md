@@ -95,13 +95,14 @@ The scripts in `dist/win` build the native Windows packages. They require a JDK 
 
 ```
 cd dist\win
+build.bat deps       # one-time: install the WiX dependencies
 build.bat            # msi and exe installer (dist\win\installer)
 build-portable.bat   # portable zip (dist\win\portable)
 build-corp.bat       # per-user msi for corporate machines (dist\win\corp)
 build-all.bat        # all of the above
 ```
 
-Each script accepts `clean` as an additional argument to remove previous build artifacts first. The portable build keeps all its data (settings, keychain, logs) in a `data` folder next to `Cryptomator.exe`, does not bundle WinFsp and does not register autostart entries or file associations. The corp build is a per-user msi that installs without admin rights; see [dist/win/corp/README.md](dist/win/corp/README.md) for deployment notes.
+Each script accepts `clean` as an additional argument to remove previous build artifacts first, and `deps` to install missing WiX components automatically. The portable target needs no WiX; if WiX is missing, `build-all.bat` builds the portable zip and skips the two installer targets with a note. The portable build keeps all its data (settings, keychain, logs) in a `data` folder next to `Cryptomator.exe`, does not bundle WinFsp and does not register autostart entries or file associations. The corp build is a per-user msi that installs without admin rights; see [dist/win/corp/README.md](dist/win/corp/README.md) for deployment notes.
 
 ## License
 
