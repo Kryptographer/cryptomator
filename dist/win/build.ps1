@@ -83,30 +83,27 @@ function Main {
 $ProgressPreference = 'SilentlyContinue' # disables Invoke-WebRequest's progress bar, which slows down downloads to a few bytes/s
 
 # check preconditions
-if ((Get-Command "git" -ErrorAction SilentlyContinue) -eq $null)
-{
-   Write-Error "Unable to find git.exe in your PATH (try: choco install git)"
-   exit 1
-}
 if ($buildInstaller -or $buildCorp) {
-	# wix is only required for the msi/exe installer, not for the portable build
-	if ((Get-Command 'wix' -ErrorAction SilentlyContinue) -eq $null)
-	{
-	   Write-Error 'Unable to find wix in your PATH (try: dotnet tool install --global wix --version 6.0.2)'
-	   exit 1
+	# wix is only required for the msi/exe installer and the corp msi, not for the portable build.
+	# Report everything that is missing at once, so it can be installed in one go.
+	$wixVersion = '6.0.2'
+	$requiredExtensions = @('WixToolset.UI.wixext', 'WixToolset.Util.wixext')
+	if ($buildInstaller) {
+		$requiredExtensions += 'WixToolset.BootstrapperApplications.wixext'
 	}
-	$wixExtensions = & wix.exe extension list --global | Out-String
-	if ($wixExtensions -notmatch 'WixToolset.UI.wixext') {
-	    Write-Error 'Wix UI extension missing. Please install it with: wix.exe extension add WixToolset.UI.wixext/6.0.2 --global)'
-	    exit 1
+	$missing = @()
+	if ((Get-Command 'wix' -ErrorAction SilentlyContinue) -eq $null) {
+		$missing += "dotnet tool install --global wix --version $wixVersion"
+		$missing += $requiredExtensions | ForEach-Object { "wix extension add --global $_/$wixVersion" }
+	} else {
+		$wixExtensions = & wix.exe extension list --global | Out-String
+		$missing += $requiredExtensions | Where-Object { $wixExtensions -notmatch [regex]::Escape($_) } | ForEach-Object { "wix extension add --global $_/$wixVersion" }
 	}
-	if ($wixExtensions -notmatch 'WixToolset.Util.wixext') {
-	    Write-Error 'Wix Util extension missing. Please install it with: wix.exe extension add WixToolset.Util.wixext/6.0.2 --global)'
-	    exit 1
-	}
-	if ($buildInstaller -and ($wixExtensions -notmatch 'WixToolset.BootstrapperApplications.wixext')) {
-	    Write-Error 'Wix Bootstrapper extension missing. Please install it with: wix.exe extension add WixToolset.BootstrapperApplications.wixext/6.0.2 --global)'
-	    exit 1
+	if ($missing.Count -gt 0) {
+		Write-Error ("WiX $wixVersion is required to build the installer and corp targets (the portable build does not need it, see build-portable.bat).`n" +
+			"Install the missing parts with the following commands, then open a new console and try again:`n  " + ($missing -join "`n  ") +
+			"`nThe dotnet tool command needs the .NET SDK, e.g.: winget install Microsoft.DotNet.SDK.8")
+		exit 1
 	}
 }
 
@@ -135,7 +132,18 @@ if ($javaVersionOutput -match 'version "(\d+)') {
 }
 $version = $(../../mvnw.cmd -f $buildDir/../../pom.xml help:evaluate -Dexpression="project.version" -q -DforceStdout)
 $semVerNo = $version -replace '(\d+\.\d+\.\d+).*','$1'
-$revisionNo = $(git rev-list --count HEAD)
+# revision number = commit count; a source zip download is not a git checkout, so fall back to 0 there
+$revisionNo = 0
+if ((Get-Command "git" -ErrorAction SilentlyContinue) -ne $null) {
+	$gitRevision = & git -C "$buildDir" rev-list --count HEAD 2>$null
+	if ($LASTEXITCODE -eq 0 -and $gitRevision) {
+		$revisionNo = [int]"$gitRevision".Trim()
+	} else {
+		Write-Warning "Not a git checkout, using revision number 0."
+	}
+} else {
+	Write-Warning "git not found in PATH, using revision number 0."
+}
 
 Write-Host "`$version=$version"
 Write-Host "`$semVerNo=$semVerNo"

@@ -70,7 +70,7 @@ echo Using JDK at "%JAVA_HOME%"
 :: build.ps1 expects to be run from dist\win
 pushd "%~dp0"
 echo Building target "%TARGET%" (clean=%CLEAN%) ...
-%PS% -NoLogo -NoProfile -ExecutionPolicy Unrestricted -Command .\build.ps1^
+%PS% -NoLogo -NoProfile -ExecutionPolicy Bypass -Command .\build.ps1^
  -AppName %APPNAME%^
  -MainJarGlob "%MAIN_JAR_GLOB%"^
  -ModuleAndMainClass "%MODULE_AND_MAIN_CLASS%"^
